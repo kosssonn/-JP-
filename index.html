@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>メガネ少年JPにメガネを授けよ</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+        h1 {
+            font-size: 24px;
+            margin: 10px 0;
+        }
+        #game-wrapper {
+            position: relative;
+            width: 400px;
+            height: 600px;
+            background-color: #87CEEB; /* 背景色（空） */
+            border: 4px solid #333;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        canvas {
+            display: block;
+        }
+        /* UI要素 */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* クリックをキャンバスに貫通させる */
+        }
+        #startBtn {
+            padding: 15px 40px;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            pointer-events: auto;
+            background-color: #ff9800;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: 0.2s;
+        }
+        #startBtn:hover {
+            background-color: #e68a00;
+        }
+        #countdown {
+            font-size: 80px;
+            font-weight: bold;
+            color: #ff3333;
+            text-shadow: 2px 2px 0 #fff, -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff;
+            display: none;
+        }
+        #score-display {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+        /* ゲームオーバー画面（フェードイン用） */
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            opacity: 0;
+            transition: opacity 2s ease-in; /* フェードイン効果 */
+            pointer-events: none;
+        }
+        #game-over-text {
+            color: red;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 0 0 10px #000;
+        }
+        #retryBtn {
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 20px;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>メガネ少年JPにメガネを授けよ</h1>
+    
+    <div id="game-wrapper">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <div id="score-display">難易度 (レベル): <span id="level">1</span></div>
+        
+        <div id="ui-layer">
+            <button id="startBtn">ゲーム開始</button>
+            <div id="countdown"></div>
+        </div>
+
+        <div id="game-over-screen">
+            <div id="game-over-text">ゲームオーバー</div>
+            <button id="retryBtn">もう一度挑戦</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+        const retryBtn = document.getElementById('retryBtn');
+        const countdownEl = document.getElementById('countdown');
+        const levelEl = document.getElementById('level');
+        const gameOverScreen = document.getElementById('game-over-screen');
+
+        // Web Audio API（効果音用）
+        let audioCtx;
+
+        // ゲームの状態管理
+        let state = 'IDLE'; // IDLE, COUNTDOWN, PLAYING, DROPPING, SUCCESS, GAMEOVER_ANIM
+        let level = 1;
+        let craneX = 200;
+        let craneDir = 1;
+        let craneSpeed = 3;
+        let glassesY = 50;
+        
+        // JPの顔の座標
+        const jpX = 200;
+        const jpY = 500;
+
+        // トロンボーンのアニメーション用変数
+        let trombone = { x: 200, y: 500, scale: 0.1, active: false };
+        let cracksActive = false;
+
+        // 音を鳴らす関数（ぴっぴっぴっ）
+        function playBeep(frequency, type, duration) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.value = frequency;
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            osc.start();
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // 初期化処理
+        function initGame() {
+            level = 1;
+            craneSpeed = 3;
+            levelEl.innerText = level;
+            resetCrane();
+            trombone.active = false;
+            cracksActive = false;
+            gameOverScreen.style.opacity = '0';
+            gameOverScreen.style.pointerEvents = 'none';
+        }
+
+        function resetCrane() {
+            craneX = Math.random() * 200 + 100;
+            glassesY = 50;
+            state = 'PLAYING';
+        }
+
+        // 開始ボタンクリック
+        startBtn.addEventListener('click', () => {
+            // AudioContextの初期化（ブラウザの制限解除）
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            initGame();
+            startBtn.style.display = 'none';
+            countdownEl.style.display = 'block';
+            state = 'COUNTDOWN';
+            
+            let count = 3;
+            countdownEl.innerText = count;
+            playBeep(880, 'square', 0.1);
+
+            const timer = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    countdownEl.innerText = count;
+                    playBeep(880, 'square', 0.1);
+                } else if (count === 0) {
+                    countdownEl.innerText = 'スタート!';
+                    playBeep(1760, 'square', 0.3); // 高い音
+                } else {
+                    clearInterval(timer);
+                    countdownEl.style.display = 'none';
+                    state = 'PLAYING';
+                }
+            }, 1000);
+        });
+
+        // リトライボタン
+        retryBtn.addEventListener('click', () => {
+            gameOverScreen.style.opacity = '0';
+            gameOverScreen.style.pointerEvents = 'none';
+            startBtn.style.display = 'block';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            state = 'IDLE';
+            drawScene();
+        });
+
+        // 画面クリック（またはタップ）でメガネを落とす
+        canvas.addEventListener('mousedown', dropGlasses);
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') dropGlasses();
+        });
+
+        function dropGlasses() {
+            if (state === 'PLAYING') {
+                state = 'DROPPING';
+            }
+        }
+
+        // --- 描画系関数 ---
+
+        function drawJP(hasGlasses = false) {
+            // 体
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(jpX - 40, jpY + 30, 80, 70);
+            
+            // 顔
+            ctx.fillStyle = '#ffe0bd';
+            ctx.beginPath();
+            ctx.arc(jpX, jpY, 40, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 髪の毛（土台）
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.arc(jpX, jpY - 10, 42, Math.PI, Math.PI * 2);
+            ctx.fill();
+
+            // 【変更】前髪をセンター分けにするための肌色パーツ
+            ctx.fillStyle = '#ffe0bd';
+            ctx.beginPath();
+            ctx.arc(jpX, jpY - 35, 10, 0, Math.PI * 2); // 中央を分ける
+            ctx.fill();
+
+            // 目
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(jpX - 15, jpY - 5, 4, 0, Math.PI * 2);
+            ctx.arc(jpX + 15, jpY - 5, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 口
+            ctx.beginPath();
+            if (state === 'GAMEOVER_ANIM') {
+                ctx.arc(jpX, jpY + 15, 10, Math.PI, Math.PI * 2); // 怒り/自暴自棄
+            } else {
+                ctx.arc(jpX, jpY + 15, 10, 0, Math.PI); // 笑顔
+            }
+            ctx.stroke();
+
+            // 成功時にメガネを描画
+            if (hasGlasses) {
+                drawGlassesModel(jpX, jpY - 5);
+            }
+        }
+
+        function drawCrane() {
+            // アームの線
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(craneX, 0);
+            ctx.lineTo(craneX, glassesY - 20);
+            ctx.stroke();
+
+            // アームの爪
+            ctx.strokeStyle = '#cc0000';
+            ctx.beginPath();
+            ctx.moveTo(craneX - 15, glassesY - 20);
+            ctx.lineTo(craneX - 20, glassesY);
+            ctx.moveTo(craneX + 15, glassesY - 20);
+            ctx.lineTo(craneX + 20, glassesY);
+            ctx.stroke();
+        }
+
+        function drawGlassesModel(x, y) {
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 3;
+            // 左レンズ
+            ctx.beginPath();
+            ctx.arc(x - 15, y, 10, 0, Math.PI * 2);
+            ctx.stroke();
+            // 右レンズ
+            ctx.beginPath();
+            ctx.arc(x + 15, y, 10, 0, Math.PI * 2);
+            ctx.stroke();
+            // ブリッジ
+            ctx.beginPath();
+            ctx.moveTo(x - 5, y);
+            ctx.lineTo(x + 5, y);
+            ctx.stroke();
+            // テンプル
+            ctx.beginPath();
+            ctx.moveTo(x - 25, y);
+            ctx.lineTo(x - 35, y - 10);
+            ctx.moveTo(x + 25, y);
+            ctx.lineTo(x + 35, y - 10);
+            ctx.stroke();
+        }
+
+        function drawTrombone() {
+            if (!trombone.active) return;
+            
+            ctx.save();
+            ctx.translate(trombone.x, trombone.y);
+            ctx.scale(trombone.scale, trombone.scale);
+            // プレイヤーに向かって飛んでくるため回転させる
+            ctx.rotate(trombone.scale * 0.5); 
+
+            // 【変更】トロンボーンのリアルな描画（グラデーションと影を使用）
+            
+            // 影の設定
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 10;
+            ctx.shadowOffsetX = 5;
+            ctx.shadowOffsetY = 5;
+
+            // ゴールドのグラデーション
+            const grad = ctx.createLinearGradient(0, -30, 0, 30);
+            grad.addColorStop(0, '#DAA520'); // 暗いゴールド
+            grad.addColorStop(0.3, '#FFD700'); // 明るいゴールド
+            grad.addColorStop(0.7, '#FFD700');
+            grad.addColorStop(1, '#DAA520'); // 暗いゴールド
+            ctx.fillStyle = grad;
+            ctx.strokeStyle = '#B8860B';
+            ctx.lineWidth = 2;
+
+            // ベル部分
+            ctx.beginPath();
+            ctx.moveTo(20, -10);
+            ctx.lineTo(50, -30);
+            ctx.lineTo(50, 30);
+            ctx.lineTo(20, 10);
+            ctx.fill();
+            ctx.stroke();
+
+            // 管部分
+            ctx.fillRect(-60, -5, 80, 10);
+            ctx.strokeRect(-60, -5, 80, 10);
+
+            // スライド部分
+            ctx.beginPath();
+            ctx.moveTo(-60, -15);
+            ctx.lineTo(0, -15);
+            ctx.arc(-60, -5, 10, 1.5 * Math.PI, 0.5 * Math.PI, true);
+            ctx.lineTo(0, 5);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        function drawCracks() {
+            if (!cracksActive) return;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.lineWidth = 3;
+            
+            // 画面が割れるエフェクト（ランダムな線）
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+
+            const drawBranch = (startX, startY, angle, depth) => {
+                if (depth === 0) return;
+                const length = Math.random() * 50 + 50;
+                const endX = startX + Math.cos(angle) * length;
+                const endY = startY + Math.sin(angle) * length;
+
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+
+                drawBranch(endX, endY, angle + (Math.random() - 0.5), depth - 1);
+                drawBranch(endX, endY, angle + (Math.random() - 0.5), depth - 1);
+            };
+
+            for (let i = 0; i < 5; i++) {
+                drawBranch(centerX, centerY, Math.random() * Math.PI * 2, 3);
+            }
+        }
+
+        // --- メインループ ---
+        function update() {
+            if (state === 'PLAYING') {
+                // アームの移動
+                craneX += craneSpeed * craneDir;
+                if (craneX > 360 || craneX < 40) {
+                    craneDir *= -1;
+                }
+            } else if (state === 'DROPPING') {
+                // メガネが落ちる
+                glassesY += 7;
+                
+                // 判定ライン（JPの目の高さ付近）に到達
+                if (glassesY >= jpY - 5) {
+                    // 難易度による許容誤差の計算（レベルが上がると判定がシビアになる）
+                    const tolerance = Math.max(5, 30 - level * 2); 
+                    
+                    if (Math.abs(craneX - jpX) < tolerance) {
+                        // 成功！
+                        state = 'SUCCESS';
+                        playBeep(1200, 'sine', 0.2); // 成功音
+                        setTimeout(() => {
+                            level++;
+                            levelEl.innerText = level;
+                            craneSpeed += 1.5; // レベルアップでスピード増加
+                            resetCrane();
+                        }, 1500);
+                    } else {
+                        // 失敗（ゲームオーバー）
+                        state = 'GAMEOVER_ANIM';
+                        playBeep(200, 'sawtooth', 0.5); // 失敗音
+                        trombone.active = true;
+                        trombone.x = jpX;
+                        trombone.y = jpY;
+                        trombone.scale = 0.5;
+                    }
+                }
+            } else if (state === 'GAMEOVER_ANIM') {
+                // トロンボーンを投げるアニメーション
+                trombone.y -= 10; // 上(画面手前)に飛んでくる
+                trombone.scale += 0.3; // どんどん大きくなる
+
+                // 画面中心にぶつかったら
+                if (trombone.scale > 15 && !cracksActive) {
+                    cracksActive = true;
+                    playBeep(100, 'square', 0.5); // 割れる音
+                    // フェードインで「ゲームオーバー」文字を出す
+                    gameOverScreen.style.opacity = '1';
+                    gameOverScreen.style.pointerEvents = 'auto';
+                }
+            }
+        }
+
+        function drawScene() {
+            // 背景クリア
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawJP(state === 'SUCCESS');
+
+            if (state === 'PLAYING' || state === 'DROPPING' || state === 'COUNTDOWN') {
+                drawCrane();
+                drawGlassesModel(craneX, glassesY);
+            }
+
+            if (state === 'SUCCESS') {
+                ctx.fillStyle = '#ff0000';
+                ctx.font = '30px bold sans-serif';
+                ctx.fillText('NICE!', 160, jpY - 80);
+            }
+
+            drawTrombone();
+            drawCracks();
+        }
+
+        function gameLoop() {
+            update();
+            drawScene();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 初回描画とループ開始
+        drawScene();
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>
